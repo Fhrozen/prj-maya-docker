@@ -1,0 +1,48 @@
+# Project Maya service container.
+#
+#   cp .env.example .env      # then edit MODEL and API_KEY
+#   docker compose up -d
+#   docker compose logs -f maya
+#
+# The image is whatever build.sh produced (project-maya:<version>-cuda12); MAYA_IMAGE
+# points compose at it. Everything Maya writes lives in the maya-data volume (/data),
+# so the container is disposable and the model, the pack and the config survive a rebuild.
+#
+# The three capabilities below are not optional:
+#   memlock    - the expert pack is mlock()ed; without the ulimit it fails
+#   SYS_NICE   - the NUMA interleave syscall (mbind) is refused by Docker's default seccomp
+#   nvidia     - the engine needs the CUDA driver; NVIDIA_DRIVER_CAPABILITIES is set in the image
+services:
+  maya:
+    image: ${MAYA_IMAGE:-project-maya:1.1.49-cuda12}
+    container_name: maya
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${MAYA_BIND:-127.0.0.1}:${MAYA_PORT:-8080}:8080"
+    volumes:
+      - maya-data:/data
+      # optional: mount a model folder you already have, read-only
+      # - ${MODELS_DIR:-/models}:/data/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    shm_size: 2gb
+    cap_add:
+      - SYS_NICE
+    # the engine can take a long time to load a large model before it answers anything
+    stop_grace_period: 2m
+    # run as the user the image was built for (1000:1000 by default). Set MAYA_USER in .env
+    # to run as your own uid, e.g. MAYA_USER=1000:1000. An empty value keeps the image's USER.
+    user: ${MAYA_USER:-}
+
+volumes:
+  maya-data:

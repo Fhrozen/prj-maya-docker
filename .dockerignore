@@ -1,0 +1,49 @@
+# The build context is the Project Maya checkout only. Everything the container
+# makes on first start (configs, packs, downloads, logs) is never part of an image.
+
+# reference checkout, not part of the build
+Strata/
+
+# git metadata: the Dockerfile's context has no .git, so maya-ds4's build id comes
+# from the MAYA_BUILD_ID build arg (cmake/build_id.cmake)
+.git/
+project-maya/.git/
+
+# the micro benchmarks and the docs are not part of the image. The C++ test sources
+# stay: CMakeLists.txt adds several tests/ targets outside STRATA_BUILD_TESTS, so CMake
+# generation fails without the folder even though those targets are never built here.
+project-maya/bench/
+project-maya/ref/
+project-maya/docs/
+project-maya/.github/
+project-maya/.gitattributes
+
+# local Python environment and build outputs (made in the image)
+.venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+project-maya/build/
+project-maya/build-*/
+
+# setup.py outputs and downloads
+project-maya/third_party/llama.cpp/
+project-maya/third_party/*.zip
+*.done
+*.log
+project-maya/maya-*.json
+project-maya/maya-report.txt
+project-maya/run-*.sh
+project-maya/run-*.bat
+project-maya/token-savings.json
+
+# data: only the shipped expert profiles are needed at runtime (the rest are test
+# fixtures, ~15 MB)
+project-maya/data/*
+!project-maya/data/expert-profile-*.bin
+
+# the compose file and its environment are host-side, not part of the image
+docker-compose.yaml
+.env
+.env.example
+tests/
