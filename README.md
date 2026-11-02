@@ -54,6 +54,9 @@ happens.
 - `.env` is created from `.env.example` when missing. `docker build` has no
   `--env-file`, so build.sh reads it and passes only the variables the Dockerfile
   declares as `ARG`.
+- `MAYA_DOCKER_BUILD_OPTS` adds extra `docker build` options (e.g. `--network
+  host`). It is appended after the build args and defaults to empty, so an unset
+  variable does not stop the script.
 - Nothing is pushed. The image stays in the local Docker.
 
 ## Running
@@ -70,12 +73,15 @@ not cosmetic:
 - `deploy.resources.reservations.devices` — the NVIDIA driver, with
   `NVIDIA_DRIVER_CAPABILITIES=compute,utility` set in the image for NVML.
 - `volumes maya-data:/data` — the model, the pack, the config and the API key
-  live here, so the container is disposable.
+  live here, so the container is disposable. `MAYA_DATA` makes it a bind-mounted
+  host folder instead of a named volume.
 
 `MAYA_USER` is empty by default, which keeps the image's user (1000:1000, the
 `--user` build.sh was given). A new named volume takes the ownership the image
 baked in, so running as a different uid cannot write `/data` on the first start:
-chown the volume once, or use a bind mount, which keeps host ownership.
+chown the volume once, or use a bind mount, which keeps host ownership. A bind
+mount folder owned by another uid is not writable by the container's user, and
+the entry point says which folder, which uid and which owner are in the way.
 
 ## Settings
 

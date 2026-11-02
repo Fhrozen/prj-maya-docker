@@ -3,7 +3,8 @@
 # a model is loaded. While the model downloads or the pack is built - which can take hours
 # the first time - the container reports healthy, so it is not marked unhealthy for a start
 # that is simply slow.
-PHASE_FILE=/run/maya-phase
+# the same path the entry point writes (the state folder, because /run is root-owned)
+PHASE_FILE=${XDG_STATE_HOME:-/data/state}/maya-phase
 phase=$(cat "$PHASE_FILE" 2>/dev/null || echo preparing)
 if [ "$phase" != running ]; then
   printf 'preparing (%s)\n' "$phase"

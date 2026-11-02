@@ -192,8 +192,11 @@ set -- "$@" --build-arg "CUDA_IMAGE=$cuda_image" --build-arg "RUNTIME_BASE=$runt
      --build-arg "CUDA_ARCHITECTURES=$arch" --build-arg "BUILD_TARGETS=$targets" \
      --build-arg "BUILD_VISION=$vision" --build-arg "MAYA_VERSION=$version" \
      --build-arg "MAYA_COMMIT=$commit" --build-arg "USER_ID=$uid" --build-arg "GROUP_ID=$gid"
+# appended after the args, and defaulted: `set -u` would stop the script on an unset
+# variable, and the extra options must be word-split so several of them work
 # shellcheck disable=SC2068
-docker build $MAYA_DOCKER_BUILD_OPTS "$@" -t "$tag" "$ctx"
+set -- "$@" ${MAYA_DOCKER_BUILD_OPTS:-}
+docker build "$@" -t "$tag" "$ctx"
 docker image inspect "$tag" --format 'built {{.RepoTags}} {{.Size}} bytes'
 echo "Not pushed anywhere. Run it with docker-compose.yaml, or:"
 echo "  docker run --rm --gpus all -p 127.0.0.1:8080:8080 --ulimit memlock=-1 --shm-size 2g \\"

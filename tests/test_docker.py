@@ -103,6 +103,17 @@ class ShellTests(unittest.TestCase):
         passed = set(re.findall(r'--build-arg "(\w+)=', BUILD_SH))
         self.assertTrue(passed <= declared, f"build.sh passes undeclared ARGs: {sorted(passed - declared)}")
 
+    def test_build_sh_extra_options_are_defaulted_and_appended(self) -> None:
+        # `set -u` would stop the script on an unset MAYA_DOCKER_BUILD_OPTS, and the
+        # options must come after the build args already collected in $@
+        self.assertIn("${MAYA_DOCKER_BUILD_OPTS:-}", BUILD_SH)
+        build_line = [line for line in BUILD_SH.splitlines() if line.startswith("docker build")]
+        self.assertTrue(build_line)
+        for line in build_line:
+            self.assertIn('docker build "$@"', line, f"extra options must be appended to $@: {line}")
+            self.assertNotIn("$MAYA_DOCKER_BUILD_OPTS", line)
+        self.assertIn("MAYA_DOCKER_BUILD_OPTS", README)
+
     def test_build_sh_default_commit_is_the_pinned_one(self) -> None:
         self.assertIn("26aacb6bcea9333e4f408a68ee60c4c1c316bd68", BUILD_SH)
         self.assertIn("26aacb6", README)
@@ -223,8 +234,39 @@ class ComposeTests(unittest.TestCase):
         svc = compose_service()
         self.assertIn(f":{EXPECTED_EXPOSE}", svc["ports"][0])
         self.assertIn("127.0.0.1", svc["ports"][0])
-        self.assertIn("maya-data:/data", svc["volumes"][0])
+        # the volume can be the named volume or a host folder, so the value is the
+        # MAYA_DATA default; the named volume must still be declared top level
+        self.assertIn("${MAYA_DATA:-maya-data}:/data", svc["volumes"][0])
         self.assertIn("maya-data", compose_service_volumes())
+        self.assertIn("MAYA_DATA", README, "README does not document MAYA_DATA")
+
+    def test_phase_file_is_writable_and_shared_by_both_scripts(self) -> None:
+        entrypoint = (DOCKER_DIR / "entrypoint.sh").read_text(encoding="utf-8")
+        healthcheck = (DOCKER_DIR / "healthcheck.sh").read_text(encoding="utf-8")
+        # /run is root-owned in the image, so the phase file must be in the state folder
+        self.assertNotIn("/run/maya-phase", entrypoint + healthcheck)
+        self.assertIn("XDG_STATE_HOME", entrypoint)
+        self.assertIn("XDG_STATE_HOME", healthcheck)
+        self.assertEqual(
+            re.findall(r"PHASE_FILE=(.*)", entrypoint)[0],
+            re.findall(r"PHASE_FILE=(.*)", healthcheck)[0],
+            "the entry point and the healthcheck read different phase files",
+        )
+        # mkdir -p returns 0 on a mount the user cannot write when the folders already
+        # exist, so the check must test writability itself
+        self.assertIn("[ -w ", entrypoint)
+
+    def test_entrypoint_names_the_real_cause_when_data_is_not_writable(self) -> None:
+        entrypoint = (DOCKER_DIR / "entrypoint.sh").read_text(encoding="utf-8")
+        # a bind-mounted folder keeps the host's ownership, so the message must say the
+        # folder, the container's uid and the owner instead of only "mount a volume"
+        self.assertIn("bind mount", entrypoint)
+        self.assertIn("stat -c", entrypoint)
+        self.assertIn("id -u", entrypoint)
+        # mountinfo keeps the mount options in their own field, so the read-only check
+        # must look at field 6 rather than for a ":ro" in the path
+        self.assertIn("$6 ~ /(^|,)ro(,|$)/", entrypoint)
+        self.assertNotIn('$0 ~ ":ro"', entrypoint)
 
     def test_compose_reads_only_documented_variables(self) -> None:
         used = env_names(COMPOSE_TEXT)

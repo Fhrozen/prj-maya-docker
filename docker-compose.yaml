@@ -5,8 +5,12 @@
 #   docker compose logs -f maya
 #
 # The image is whatever build.sh produced (project-maya:<version>-cuda12); MAYA_IMAGE
-# points compose at it. Everything Maya writes lives in the maya-data volume (/data),
-# so the container is disposable and the model, the pack and the config survive a rebuild.
+# points compose at it. Everything Maya writes lives in /data, so the container is
+# disposable and the model, the pack and the config survive a rebuild. /data is the
+# maya-data named volume by default; MAYA_DATA makes it a bind-mounted folder instead.
+# A bind mount keeps the host's ownership, so that folder must be owned by the uid the
+# container runs as (1000:1000 unless MAYA_USER says otherwise); a new named volume takes
+# the ownership baked into the image.
 #
 # The three capabilities below are not optional:
 #   memlock    - the expert pack is mlock()ed; without the ulimit it fails
@@ -21,7 +25,8 @@ services:
     ports:
       - "${MAYA_BIND:-127.0.0.1}:${MAYA_PORT:-8080}:8080"
     volumes:
-      - maya-data:/data
+      # MAYA_DATA empty -> the maya-data named volume; a host folder -> a bind mount
+      - ${MAYA_DATA:-maya-data}:/data
       # optional: mount a model folder you already have, read-only
       # - ${MODELS_DIR:-/models}:/data/models:ro
     deploy:

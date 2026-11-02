@@ -34,7 +34,9 @@ IMAGE_APP=${MAYA_IMAGE_APP:-/opt/maya}
 PYBIN="$APP/venv/bin/python3"
 [ -x "$PYBIN" ] || PYBIN=$(command -v python3 || echo python3)
 KEY_FILE=/data/state/api-key
-PHASE_FILE=/run/maya-phase
+# /run is root-owned in the image, so the phase file has to be in the state folder that
+# chown gave this user; healthcheck.sh reads the same path.
+PHASE_FILE=${XDG_STATE_HOME:-/data/state}/maya-phase
 PORT=${PORT:-8080}
 
 say()  { printf '%s\n' "$*"; }
@@ -47,12 +49,51 @@ if [ "$#" -gt 0 ] && [ "$1" != "run" ] && [ "$1" != "serve" ]; then
   exec "$@"
 fi
 
-mkdir -p /data/app /data/models /data/config /data/state /data/home /run 2>/dev/null \
-  || die "/data is not writable. Mount a volume there: -v maya-data:/data"
-
-if ! grep -q " /data " /proc/self/mountinfo 2>/dev/null; then
-  warn "/data is not a volume, so the model, the pack and your config are lost when this container is removed. Add: -v maya-data:/data"
+# ---- /data. A named volume and a bind-mounted folder both work, but they behave
+# differently: a new named volume takes the ownership baked into the image, while a bind
+# mount keeps the host's ownership. So a folder owned by another uid is not writable here,
+# and that is what the message below has to say.
+mount_line=$(awk '$5 == "/data" { print; exit }' /proc/self/mountinfo 2>/dev/null)
+if [ -z "$mount_line" ]; then
+  warn "/data is not a mount, so the model, the pack and your config are lost when this container is removed. Add: -v maya-data:/data"
 fi
+
+# A bind-mounted folder and a named volume both work, but a bind mount keeps the host's
+# ownership, so a folder owned by another uid is not writable by the container's user.
+# mkdir -p cannot tell: it returns 0 when the folders already exist (they are baked into
+# the image), so the folders are tested with -w.
+not_writable() {
+  bad=$1
+  me=$(id -u 2>/dev/null || echo '?')
+  owner=$(stat -c '%u:%g' "$bad" 2>/dev/null || echo '?')
+  # the folder can be a mount of its own (a read-only model mount), and that is the cause
+  bad_line=$(awk -v p="$bad" '$5 == p { print; exit }' /proc/self/mountinfo 2>/dev/null)
+  if [ -n "$bad_line" ]; then
+    set -- $bad_line
+    case "$6" in
+      *,ro,*|ro,*)
+        die "${bad} is not writable by uid ${me}. It is a read-only mount of $4. The pack is written next to the model files, so mount it writable, or set MODEL_PATH to a writable folder."
+        ;;
+    esac
+  fi
+  case "$mount_line" in
+    *"/var/lib/docker/volumes/"*)
+      die "${bad} is not writable by uid ${me}. /data is a named volume owned by ${owner}. A new named volume takes the ownership baked into the image; run as that user (MAYA_USER=${owner}) or chown the volume once."
+      ;;
+    '')
+      die "${bad} is not writable by uid ${me}. /data is not a mount, so it is a folder inside the image owned by ${owner}. Mount a volume there: -v maya-data:/data"
+      ;;
+    *)
+      where=$(awk '$5 == "/data" { print $4; exit }' /proc/self/mountinfo 2>/dev/null)
+      die "${bad} is not writable by uid ${me}. /data is a bind mount of ${where}, which keeps the host's ownership; ${bad} is owned by ${owner}. chown it on the host (chown ${me}:${me} ${where}${bad#/data}), run as its owner (MAYA_USER=${owner}), or use a named volume instead (-v maya-data:/data)."
+      ;;
+  esac
+}
+[ -w /data ] || not_writable /data
+for d in /data/app /data/models /data/config /data/state /data/home; do
+  mkdir -p "$d" 2>/dev/null || not_writable "$d"
+  [ -w "$d" ] || not_writable "$d"
+done
 
 # ---- the app tree: the image's copy is the read-only source, /data/app the working one
 # (Maya writes its config, its log and its run script next to the tree it runs from, so
@@ -83,9 +124,10 @@ if [ -z "${API_KEY:-}" ] && [ ! -r "$KEY_FILE" ]; then
 elif [ -n "${API_KEY:-}" ] && [ "${#API_KEY}" -lt 16 ]; then
   warn "API_KEY is short (${#API_KEY} characters). Use 16 or more; 'openssl rand -hex 24' makes a good one."
 fi
-if grep -q " /data/models " /proc/self/mountinfo 2>/dev/null; then
-  ro=$(awk '$5 ~ "/data/models" && $0 ~ ":ro" {print; exit}' /proc/self/mountinfo)
-  [ -n "$ro" ] && warn "/data/models is mounted read-only. The pack is written next to the model files, so Maya stops there: mount it writable, or set MODEL_PATH to a writable folder."
+# the read-only flag is the option field of the mountinfo line (field 6), not a ":ro" in
+# the path; the old check could never match a read-only bind mount.
+if awk '$5 == "/data/models" && $6 ~ /(^|,)ro(,|$)/ { found = 1 } END { exit !found }' /proc/self/mountinfo 2>/dev/null; then
+  warn "/data/models is mounted read-only. The pack is written next to the model files, so Maya stops there: mount it writable, or set MODEL_PATH to a writable folder."
 fi
 
 # ---- the model, the pack, the config (reuses maya.py's own steps; nothing is duplicated)
